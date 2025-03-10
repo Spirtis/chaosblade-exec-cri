@@ -20,11 +20,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/chaosblade-io/chaosblade-spec-go/log"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/chaosblade-io/chaosblade-spec-go/log"
 
 	"github.com/chaosblade-io/chaosblade-exec-cri/exec/container"
 	"github.com/chaosblade-io/chaosblade-spec-go/spec"
@@ -72,31 +73,51 @@ type Client struct {
 }
 
 func NewClient(endpoint, namespace string) (*Client, error) {
+	// 如果已存在可用客户端，直接返回
 	if cli != nil {
 		if ok, _ := cli.cclient.IsServing(cli.Ctx); ok {
+			log.Infof(cli.Ctx, "Reuse existing containerd connection to %s", endpoint)
 			return cli, nil
 		}
 	}
 
+	// 初始化日志
 	if endpoint == "" {
 		endpoint = DefaultUinxAddress
+		log.Infof(context.Background(), "Using default containerd endpoint: %s", endpoint)
 	}
 	if namespace == "" {
 		namespace = DefaultContainerdNS
+		log.Infof(context.Background(), "Using default containerd namespace: %s", namespace)
 	}
-	cclient, err := containerd.New(endpoint, containerd.WithDefaultNamespace(namespace))
-	if err != nil {
-		return nil, err
-	}
-	var (
-		ctx    = context.Background()
-		cancel context.CancelFunc
+
+	log.Infof(context.Background(), "Connecting to containerd at %s (namespace: %s)...", endpoint, namespace)
+
+	// 创建客户端
+	cclient, err := containerd.New(
+		endpoint,
+		containerd.WithDefaultNamespace(namespace),
+		containerd.WithTimeout(connectionTimeout), // 可选：添加超时配置
 	)
-	ctx = namespaces.WithNamespace(ctx, namespace)
-	ctx, cancel = context.WithCancel(ctx)
+	if err != nil {
+		log.Warnf(context.Background(), "Failed to connect containerd: %v", err)
+		return nil, fmt.Errorf("containerd connection failed: %v", err)
+	}
+
+	// 验证服务状态
+	if ok, err := cclient.IsServing(context.Background()); !ok || err != nil {
+		log.Warnf(context.Background(), "Containerd service not ready: %v", err)
+		return nil, fmt.Errorf("containerd service unavailable: %v", err)
+	}
+
+	log.Infof(context.Background(), "Successfully connected to containerd %s", endpoint)
+
+	// 初始化上下文
+	ctx := namespaces.WithNamespace(context.Background(), namespace)
+	ctx, cancel := context.WithCancel(ctx)
+
 	cli = &Client{
 		cclient: cclient,
-		connMu:  sync.Mutex{},
 		Ctx:     ctx,
 		Cancel:  cancel,
 	}
@@ -203,7 +224,7 @@ func (c *Client) ExecContainer(ctx context.Context, containerId, command string)
 	return container.ExecContainer(ctx, id, command)
 }
 
-//ExecuteAndRemove: create and start a container for executing a command, and remove the container
+// ExecuteAndRemove: create and start a container for executing a command, and remove the container
 func (c *Client) ExecuteAndRemove(ctx context.Context, config *containertype.Config, hostConfig *containertype.HostConfig,
 	networkConfig *network.NetworkingConfig, containerName string, removed bool, timeout time.Duration,
 	command string, containerInfo container.ContainerInfo) (containerId string, output string, err error, code int32) {
