@@ -50,7 +50,7 @@ const (
 )
 
 const (
-	DefaultStateDir = "/run/containerd"
+	DefaultStateDir = "/run/k3s/containerd"
 	// DefaultAddress is the default unix socket address
 	DefaultUinxAddress = DefaultStateDir + "/containerd.sock"
 	DefaultRuntime     = "io.containerd.runc.v2"
